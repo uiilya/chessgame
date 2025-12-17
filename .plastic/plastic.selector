@@ -1,4 +1,0 @@
-repository "chessgame/GameDevChess@18968338290402@cloud"
-  path "/"
-    br "/main"
-    co "/main"
