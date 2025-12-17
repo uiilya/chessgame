@@ -15,14 +15,17 @@ public class ChessPiece : MonoBehaviour
     private int yBoard = -1;
     
     // "black" or "white"
-    private string player; 
+    public string player; 
 
     public void Activate()
     {
         controller = GameObject.FindGameObjectWithTag("GameController");
 
         // Take the instantiated prefab and adjust transform
-        SetCoords();
+        if (xBoard >= 0 && yBoard >= 0)
+        {
+            SetCoords();
+        }
 
         SpriteRenderer sr = GetComponent<SpriteRenderer>();
 
