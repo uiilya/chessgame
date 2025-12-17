@@ -340,6 +340,53 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1974870292
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1974870294}
+  - component: {fileID: 1974870293}
+  m_Layer: 0
+  m_Name: StockFishManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1974870293
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1974870292}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 65ef8b2b5294c0346b505d6ffab7807c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::StockfishManager
+  stockfishPath: stockfish.exe
+  skillLevel: 5
+  thinkingTime: 1000
+--- !u!4 &1974870294
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1974870292}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1.78849, y: 0.16984, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2044166132
 GameObject:
   m_ObjectHideFlags: 0
@@ -387,6 +434,7 @@ MonoBehaviour:
   tilePrefab: {fileID: 7066643839663854963, guid: 93865ccd5cafd0649b508d875c94561b, type: 3}
   chesspiece: {fileID: 6729158117470113361, guid: 3575b5b78d277f94ba9740bdd8364624, type: 3}
   movePlatePrefab: {fileID: 4108929819976630360, guid: 6374e20b863d14d41af76d3127bb4c9d, type: 3}
+  stockfishManager: {fileID: 1974870293}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -394,3 +442,4 @@ SceneRoots:
   - {fileID: 519420032}
   - {fileID: 619394802}
   - {fileID: 2044166134}
+  - {fileID: 1974870294}

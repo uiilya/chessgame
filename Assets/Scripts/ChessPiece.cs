@@ -14,20 +14,28 @@ public class ChessPiece : MonoBehaviour
     private int xBoard = -1;
     private int yBoard = -1;
     
-    // "black" or "white"
-    private string player; 
+    // "black" or "white" - public so GameManager can check it
+    public string player; 
 
     public void Activate()
     {
         controller = GameObject.FindGameObjectWithTag("GameController");
+        
+        if (controller == null)
+        {
+            Debug.LogError("GameController not found! Make sure GameObject has 'GameController' tag");
+        }
 
         // Take the instantiated prefab and adjust transform
         SetCoords();
 
         SpriteRenderer sr = GetComponent<SpriteRenderer>();
 
+        // Remove "(Clone)" suffix that Unity adds to instantiated objects
+        string pieceName = this.name.Replace("(Clone)", "").Trim();
+        
         // Setup sprites based on name
-        switch (this.name)
+        switch (pieceName)
         {
             case "black_queen": sr.sprite = black_queen; player = "black"; break;
             case "black_knight": sr.sprite = black_knight; player = "black"; break;
@@ -72,6 +80,20 @@ public class ChessPiece : MonoBehaviour
 
     public void InitiateMovePlates()
     {
+        Debug.Log($"InitiateMovePlates called for {this.name}, player: {player}");
+        
+        if (controller == null)
+        {
+            Debug.LogError("Cannot create move plates: controller is null!");
+            return;
+        }
+        
+        if (movePlate == null)
+        {
+            Debug.LogError("Cannot create move plates: movePlate prefab is null! Assign it in the Inspector.");
+            return;
+        }
+        
         // 1. Clean up old plates first
         DestroyMovePlates();
 
@@ -118,9 +140,19 @@ public class ChessPiece : MonoBehaviour
 
             case "black_pawn":
                 PawnMovePlate(xBoard, yBoard - 1);
+                // Allow double move from starting position (rank 7 for black)
+                if (yBoard == 6 && controller.GetComponent<GameManager>().GetPosition(xBoard, yBoard - 1) == null)
+                {
+                    PawnMovePlate(xBoard, yBoard - 2);
+                }
                 break;
             case "white_pawn":
                 PawnMovePlate(xBoard, yBoard + 1);
+                // Allow double move from starting position (rank 2 for white)
+                if (yBoard == 1 && controller.GetComponent<GameManager>().GetPosition(xBoard, yBoard + 1) == null)
+                {
+                    PawnMovePlate(xBoard, yBoard + 2);
+                }
                 break;
         }
     }

@@ -18,10 +18,18 @@ public class GameManager : MonoBehaviour
 
     private string currentPlayer = "white";
     private bool gameOver = false;
+    
+    [Header("AI Settings")]
+    public StockfishManager stockfishManager;
+    public BoardStateConverter boardConverter;
+    private bool waitingForAI = false;
 
     // Unity calls this function automatically when the game starts
     void Start()
     {
+        // Initialize board state converter
+        boardConverter = new BoardStateConverter();
+        
         GenerateBoard();
         
         // <--- ADD THIS BLOCK: Spawn White Pieces
@@ -77,10 +85,25 @@ public class GameManager : MonoBehaviour
                 // We hit something!
                 if (hit.collider.GetComponent<ChessPiece>() != null)
                 {
-                   // For now, let's just log it to prove it works
-                   Debug.Log("I clicked: " + hit.collider.name);
-                   // When we click a piece, we will eventually ask it to show its moves
-                   hit.collider.GetComponent<ChessPiece>().InitiateMovePlates();
+                   ChessPiece clickedPiece = hit.collider.GetComponent<ChessPiece>();
+                   
+                   // Only allow moves if it's the player's turn and not waiting for AI
+                   if (waitingForAI)
+                   {
+                       Debug.Log("Waiting for AI to move...");
+                       return;
+                   }
+                   
+                   // Check if the piece belongs to the current player
+                   if (clickedPiece.player == currentPlayer)
+                   {
+                       Debug.Log("I clicked: " + hit.collider.name);
+                       clickedPiece.InitiateMovePlates();
+                   }
+                   else
+                   {
+                       Debug.Log("Not your turn! Current player: " + currentPlayer);
+                   }
                 }
             }
         }
@@ -182,7 +205,130 @@ public class GameManager : MonoBehaviour
         // 4. Update the grid's NEW position
         SetPosition(x, y, piece);
 
-        // 5. Switch Turns (Optional, we'll implement fully later)
-        // NextTurn();
+        // 5. Update castling rights and en passant
+        if (boardConverter != null)
+        {
+            boardConverter.UpdateCastlingRights(piece, cp.GetXBoard(), cp.GetYBoard());
+            
+            // Check if pawn moved (for en passant and halfmove clock)
+            bool isPawn = piece.name.ToLower().Contains("pawn");
+            if (isPawn)
+            {
+                boardConverter.SetEnPassantSquare(cp.GetYBoard(), y, x);
+            }
+            else
+            {
+                boardConverter.ClearEnPassant();
+            }
+        }
+
+        // 6. Switch Turns
+        NextTurn();
+    }
+    
+    void NextTurn()
+    {
+        // Switch player
+        currentPlayer = (currentPlayer == "white") ? "black" : "white";
+        Debug.Log("Turn: " + currentPlayer);
+        
+        // Update move counters
+        if (boardConverter != null)
+        {
+            boardConverter.IncrementMoveCounters(false, currentPlayer == "white");
+        }
+        
+        // If it's black's turn and we have Stockfish, get AI move
+        if (currentPlayer == "black" && stockfishManager != null)
+        {
+            TriggerAIMove();
+        }
+    }
+    
+    void TriggerAIMove()
+    {
+        waitingForAI = true;
+        
+        // Get current board state as FEN
+        string fen = boardConverter.BoardToFEN(pieces, currentPlayer);
+        Debug.Log("Current FEN: " + fen);
+        
+        // Request best move from Stockfish
+        stockfishManager.GetBestMove(fen, OnAIMoveReceived);
+    }
+    
+    void OnAIMoveReceived(string uciMove)
+    {
+        if (string.IsNullOrEmpty(uciMove))
+        {
+            Debug.LogError("Stockfish did not return a valid move!");
+            waitingForAI = false;
+            return;
+        }
+        
+        Debug.Log("AI wants to move: " + uciMove);
+        
+        // Parse UCI move
+        if (boardConverter.ParseUCIMove(uciMove, out int fromX, out int fromY, out int toX, out int toY, out char promotion))
+        {
+            ExecuteAIMove(fromX, fromY, toX, toY, promotion);
+        }
+        else
+        {
+            Debug.LogError("Failed to parse UCI move: " + uciMove);
+            waitingForAI = false;
+        }
+    }
+    
+    void ExecuteAIMove(int fromX, int fromY, int toX, int toY, char promotion)
+    {
+        GameObject piece = GetPosition(fromX, fromY);
+        
+        if (piece == null)
+        {
+            Debug.LogError($"No piece found at {fromX},{fromY}");
+            waitingForAI = false;
+            return;
+        }
+        
+        // Check if capturing opponent piece
+        GameObject targetPiece = GetPosition(toX, toY);
+        if (targetPiece != null)
+        {
+            // Destroy captured piece
+            Destroy(targetPiece);
+        }
+        
+        // Move the piece
+        MovePiece(piece, toX, toY);
+        
+        // Handle pawn promotion
+        if (promotion != ' ')
+        {
+            PromotePawn(piece, toX, toY, promotion);
+        }
+        
+        waitingForAI = false;
+    }
+    
+    void PromotePawn(GameObject pawn, int x, int y, char promotionPiece)
+    {
+        // Destroy the pawn
+        Destroy(pawn);
+        
+        // Create new piece based on promotion character
+        string color = currentPlayer;
+        string pieceName = "";
+        
+        switch (promotionPiece)
+        {
+            case 'q': pieceName = color + "_queen"; break;
+            case 'r': pieceName = color + "_rook"; break;
+            case 'b': pieceName = color + "_bishop"; break;
+            case 'n': pieceName = color + "_knight"; break;
+            default: pieceName = color + "_queen"; break; // Default to queen
+        }
+        
+        CreatePiece(pieceName, x, y);
     }
 }
