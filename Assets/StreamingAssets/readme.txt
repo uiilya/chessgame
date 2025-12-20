@@ -1,0 +1,1 @@
+Place stockfish.exe in this folder.
