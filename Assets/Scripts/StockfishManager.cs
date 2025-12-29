@@ -3,24 +3,43 @@ using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using UnityEngine;
+using System.Text.RegularExpressions;
+
+public class StockfishResult
+{
+    public bool success;
+    public string bestmove;
+    public int? mate;       
+    public int? evaluation; 
+}
 
 public class StockfishManager : MonoBehaviour
 {
     private Process stockfishProcess;
     private StreamWriter stockfishInput;
     private StreamReader stockfishOutput;
-    private bool isReady = false;
+
     private string lastBestMove = "";
+    private int? lastMate = null;
+    private int? lastEval = null;
     private bool moveReceived = false;
 
+    // ADDED: Static variable to persist skill level across scene reloads
+    public static int persistedSkillLevel = 10;
+
     [Header("Stockfish Settings")]
-    public string stockfishPath = "stockfish.exe"; // Make sure this matches your file name!
+    public string stockfishPath = "stockfish.exe"; 
     [Range(0, 20)]
     public int skillLevel = 10;
     public int thinkingTime = 500; // ms
+    
+    [Header("Debug")]
+    public bool debugMode = true;
 
     void Start()
     {
+        // Sync with persisted value from Debug UI
+        skillLevel = persistedSkillLevel;
         InitializeStockfish();
     }
 
@@ -47,7 +66,6 @@ public class StockfishManager : MonoBehaviour
 
             stockfishProcess = new Process { StartInfo = startInfo };
             stockfishProcess.Start();
-
             stockfishInput = stockfishProcess.StandardInput;
             stockfishOutput = stockfishProcess.StandardOutput;
 
@@ -55,15 +73,15 @@ public class StockfishManager : MonoBehaviour
             SendCommand($"setoption name Skill Level value {skillLevel}");
             SendCommand("isready");
             
-            isReady = true;
+            if (debugMode) UnityEngine.Debug.Log($"Stockfish Initialized. Skill Level: {skillLevel}");
         }
         catch (Exception e)
         {
-            UnityEngine.Debug.LogError($"Failed to start Stockfish: {e.Message}");
+            UnityEngine.Debug.LogError("Stockfish Init Error: " + e.Message);
         }
     }
 
-    void SendCommand(string command)
+    public void SendCommand(string command)
     {
         if (stockfishInput != null)
         {
@@ -72,16 +90,19 @@ public class StockfishManager : MonoBehaviour
         }
     }
 
-    public void GetBestMove(string fenPosition, Action<string> callback)
+    public void GetBestMove(string fenPosition, Action<StockfishResult> callback)
     {
-        if (!isReady) return;
         StartCoroutine(GetBestMoveAsync(fenPosition, callback));
     }
 
-    IEnumerator GetBestMoveAsync(string fenPosition, Action<string> callback)
+    IEnumerator GetBestMoveAsync(string fenPosition, Action<StockfishResult> callback)
     {
         moveReceived = false;
         lastBestMove = "";
+        lastMate = null;
+        lastEval = null;
+
+        if (debugMode) UnityEngine.Debug.Log($"[Stockfish] Sending FEN: {fenPosition}");
 
         SendCommand($"position fen {fenPosition}");
         SendCommand($"go movetime {thinkingTime}");
@@ -97,27 +118,74 @@ public class StockfishManager : MonoBehaviour
             yield return null;
         }
 
-        callback?.Invoke(lastBestMove);
+        if (debugMode)
+        {
+            string scoreType = lastMate.HasValue ? $"Mate in {lastMate}" : $"CP {lastEval}";
+            UnityEngine.Debug.Log($"[Stockfish] BestMove: {lastBestMove} | Score: {scoreType}");
+        }
+
+        StockfishResult result = new StockfishResult
+        {
+            success = !string.IsNullOrEmpty(lastBestMove),
+            bestmove = lastBestMove,
+            mate = lastMate,
+            evaluation = lastEval
+        };
+
+        callback?.Invoke(result);
     }
 
     IEnumerator ReadStockfishOutput()
     {
         while (!moveReceived)
         {
-            if (stockfishOutput != null && !stockfishOutput.EndOfStream)
+            if (stockfishOutput != null)
             {
-                string line = stockfishOutput.ReadLine();
-                if (line != null && line.StartsWith("bestmove"))
+                string line = stockfishOutput.ReadLine(); 
+                
+                if (line != null)
                 {
-                    string[] parts = line.Split(' ');
-                    if (parts.Length >= 2)
+                    if (line.StartsWith("info") && line.Contains("score"))
                     {
-                        lastBestMove = parts[1];
-                        moveReceived = true;
+                        ParseScore(line);
                     }
+
+                    if (line.StartsWith("bestmove"))
+                    {
+                        string[] parts = line.Split(' ');
+                        if (parts.Length >= 2)
+                        {
+                            lastBestMove = parts[1];
+                            moveReceived = true;
+                        }
+                    }
+                }
+                else
+                {
+                    yield return null; 
                 }
             }
             yield return null;
+        }
+    }
+
+    void ParseScore(string line)
+    {
+        if (line.Contains("mate"))
+        {
+            var match = Regex.Match(line, @"mate\s+(-?\d+)");
+            if (match.Success)
+            {
+                lastMate = int.Parse(match.Groups[1].Value);
+            }
+        }
+        else if (line.Contains("cp"))
+        {
+            var match = Regex.Match(line, @"cp\s+(-?\d+)");
+            if (match.Success)
+            {
+                lastEval = int.Parse(match.Groups[1].Value);
+            }
         }
     }
 
@@ -126,7 +194,6 @@ public class StockfishManager : MonoBehaviour
         if (stockfishProcess != null && !stockfishProcess.HasExited)
         {
             SendCommand("quit");
-            stockfishProcess.Kill();
             stockfishProcess.Close();
         }
     }

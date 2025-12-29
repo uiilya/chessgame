@@ -1,317 +1,384 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
+using System.Collections; 
 
 public class GameManager : MonoBehaviour
 {
-    [Header("Art Assets")]
-    public GameObject tilePrefab; 
-    public GameObject chesspiece; 
-    public GameObject movePlatePrefab; 
-
-    [Header("UI Elements")]
-    public GameObject gameOverPanel; 
-    public Text winnerText;
-    public GameObject startButton;
-    public Text turnIndicator; 
-
-    [Header("AI Settings")]
+    [Header("Managers")]
+    public PieceManager pieceManager;       
+    public DeckManager deckManager;         
+    public BoardHighlighter highlighter;    
     public StockfishManager stockfishManager;
+    public AudioManager audioManager;
+    public UIManager uiManager;
+    public HandVisualsManager handVisuals;
+
+    [Header("Board Assets")]
+    public GameObject tilePrefab; 
+    
+    [Header("Settings")]
+    public bool useCustomBoardArt = true; 
+    public bool autoConfigureCamera = true; 
+
     private BoardStateConverter boardConverter;
-    private bool waitingForAI = false;
-
-    // Internal Variables
-    private GameObject[,] positions = new GameObject[8, 8];
-    private GameObject[,] pieces = new GameObject[8, 8]; 
-
+    public enum GamePhase { SetupDraw, SetupDeploy, PlayerTurnDeploy, PlayerTurnMove, AITurn }
+    private GamePhase currentPhase = GamePhase.SetupDraw;
     private string currentPlayer = "white";
     private bool gameOver = false;
-    private bool isSetupPhase = true; 
-    private string pieceToPlaceName = null; 
 
     void Start()
     {
+        if(!pieceManager) pieceManager = GetComponent<PieceManager>();
+        if(!deckManager) deckManager = GetComponent<DeckManager>();
+        if(!highlighter) highlighter = GetComponent<BoardHighlighter>();
+        if(!audioManager) audioManager = GetComponent<AudioManager>();
+        if(!uiManager) uiManager = GetComponent<UIManager>();
+        if(!handVisuals) handVisuals = GetComponent<HandVisualsManager>();
+
         boardConverter = new BoardStateConverter();
+        
         GenerateBoard();
-        
-        // Spawn Kings
-        CreatePiece("white_king", 4, 0);
-        CreatePiece("black_king", 4, 7);
+        SpawnKingsAndGuards();
 
-        SpawnBank();
-        
-        Camera.main.transform.position = new Vector3(3.5f, 3.5f, -10);
-        Camera.main.orthographicSize = 6.0f;
+        if (autoConfigureCamera)
+        {
+            Camera.main.transform.position = new Vector3(3.5f, 2.5f, -10);
+            Camera.main.orthographicSize = 7.0f; 
+        }
 
-        if(turnIndicator) turnIndicator.text = "Setup Phase";
+        deckManager.InitializeDecks();
+        StartSetupPhase();
     }
 
     void Update()
     {
         if (gameOver) return;
-
-        if (isSetupPhase) UpdateSetupPhase();
-        else UpdateGameplayPhase();
+        if (currentPhase == GamePhase.PlayerTurnMove) HandlePlayerMoveInput();
     }
 
-    // =========================================================
-    //                PHASE 1: SETUP LOGIC
-    // =========================================================
-
-    void SpawnBank()
+    // --- DELEGATES & HELPERS ---
+    public void ClearMoveHints() => highlighter.ClearMoveHints();
+    public GameObject CreateHighlight(int x, int y, Color c, BoardHighlighter.HighlightType t, bool h) 
+        => highlighter.CreateHighlight(x, y, c, t, h);
+    public bool PositionOnBoard(int x, int y) => pieceManager.PositionOnBoard(x, y);
+    public GameObject GetPosition(int x, int y) => pieceManager.GetPosition(x, y);
+    
+    public void CapturePiece(GameObject piece) 
     {
-        string[] bankPieces = { "queen", "bishop", "knight", "rook", "pawn" };
-        for (int i = 0; i < bankPieces.Length; i++)
+        if(audioManager) audioManager.PlayPieceImpact();
+        pieceManager.CapturePiece(piece);
+    }
+    
+    public void PlayMoveSound()
+    {
+        if(audioManager) audioManager.PlayPieceMove();
+    }
+
+    public void MovePiece(GameObject piece, int x, int y)
+    {
+        StartCoroutine(MoveSequence(piece, x, y));
+    }
+
+    IEnumerator MoveSequence(GameObject piece, int x, int y)
+    {
+        ChessPiece cp = piece.GetComponent<ChessPiece>();
+        int startX = cp.GetXBoard();
+        int startY = cp.GetYBoard();
+
+        yield return StartCoroutine(pieceManager.MovePieceLogic(piece, x, y));
+
+        highlighter.HighlightLastMove(startX, startY, x, y);
+        highlighter.ClearMoveHints(); 
+
+        if (currentPlayer == "white") StartAITurn();
+        else StartPlayerTurn();
+    }
+
+    // UPDATED: Now accepts aiClaimedMate flag
+    void ExecuteAIMove(int fromX, int fromY, int toX, int toY, char promotion, bool aiClaimedMate)
+    {
+        StartCoroutine(AIMoveSequence(fromX, fromY, toX, toY, promotion, aiClaimedMate));
+    }
+
+    IEnumerator AIMoveSequence(int fromX, int fromY, int toX, int toY, char promotion, bool aiClaimedMate)
+    {
+        GameObject aiPiece = pieceManager.GetPosition(fromX, fromY);
+        GameObject target = pieceManager.GetPosition(toX, toY);
+        
+        if (target != null) CapturePiece(target);
+        else if(audioManager) audioManager.PlayPieceMove();
+
+        yield return StartCoroutine(pieceManager.MovePieceLogic(aiPiece, toX, toY));
+        
+        highlighter.HighlightLastMove(fromX, fromY, toX, toY);
+
+        if(promotion == 'q')
         {
-            SpawnBankIcon("white_" + bankPieces[i], -2.5f, 1.0f + (i * 1.2f));
-            SpawnBankIcon("black_" + bankPieces[i], 9.5f, 1.0f + (i * 1.2f));
+            Destroy(aiPiece);
+            pieceManager.CreatePiece("black_queen", toX, toY);
+            pieceManager.SetPosition(toX, toY, pieceManager.GetPosition(toX, toY));
+        }
+
+        // CRITICAL FIX: The "Trust but Verify" Check
+        // If the AI claimed it was going to mate us, we now check the ACTUAL board state.
+        if (aiClaimedMate)
+        {
+            if (stockfishManager.debugMode) Debug.Log("[GameManager] Verifying Checkmate...");
+            VerifyPlayerSurvival();
+        }
+        else
+        {
+            StartPlayerTurn();
         }
     }
 
-    void SpawnBankIcon(string name, float x, float y)
+    // NEW: Generates FEN for WHITE and asks Stockfish "Can I move?"
+    void VerifyPlayerSurvival()
     {
-        GameObject obj = Instantiate(chesspiece, new Vector3(x, y, -1), Quaternion.identity);
-        obj.name = name; 
-        obj.tag = "Bank"; 
+        // 1. Generate FEN for White (Player)
+        string fen = boardConverter.BoardToFEN(pieceManager.GetAllPieces(), "white");
         
-        ChessPiece cp = obj.GetComponent<ChessPiece>();
-        cp.Activate();
-        
-        Destroy(cp); 
-        Destroy(obj.GetComponent<BoxCollider2D>()); 
-        
-        obj.AddComponent<BoxCollider2D>(); 
-        BankPiece bp = obj.AddComponent<BankPiece>();
-        bp.pieceName = name; 
+        // 2. Ask Stockfish for the best move for White
+        stockfishManager.GetBestMove(fen, OnPlayerStatusVerified);
     }
 
-    public void SelectPieceToPlace(string name) { pieceToPlaceName = name; }
-
-    void UpdateSetupPhase()
+    void OnPlayerStatusVerified(StockfishResult result)
     {
-        if (Input.GetMouseButtonDown(0) && pieceToPlaceName != null)
-        {
-            Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-            int x = Mathf.RoundToInt(mousePos.x);
-            int y = Mathf.RoundToInt(mousePos.y);
+        // 3. Analyze Result
+        // If Stockfish says "bestmove (none)" OR "mate 0", it confirms we are truly stuck.
+        bool isMated = (result.bestmove == "(none)" || result.bestmove == "none");
+        
+        if (!isMated && result.mate != null && result.mate == 0) 
+            isMated = true;
 
-            if (CanPlacePiece(x, y)) CreatePiece(pieceToPlaceName, x, y);
+        if (isMated)
+        {
+            if (stockfishManager.debugMode) Debug.Log("[GameManager] Verification Complete: DEFEAT Confirmed.");
+            Winner("black");
+        }
+        else
+        {
+            if (stockfishManager.debugMode) Debug.Log("[GameManager] Verification Complete: AI Blundered! Game Continues.");
+            StartPlayerTurn();
         }
     }
 
-    bool CanPlacePiece(int x, int y)
+    // --- GAME FLOW ---
+
+    void StartSetupPhase() {
+        currentPhase = GamePhase.SetupDraw;
+        uiManager.SetTurnText("Setup Phase");
+        deckManager.DrawCard("white", 5); deckManager.DrawCard("black", 5);
+        if(audioManager) audioManager.PlayDeckDeal(); 
+        handVisuals.RefreshPlayerHand(deckManager.whiteHand);
+        StartCoroutine(AnimateSetupPhase());
+    }
+
+    IEnumerator AnimateSetupPhase()
     {
-        if (!PositionOnBoard(x, y)) return false;
-        if (GetPosition(x, y) != null) return false;
+        uiManager.SetPhaseText("Opponent Deploying...");
+        for (int i = 0; i < 5; i++)
+        {
+            Vector3? deploySpot = GetValidAIDeploySpot();
+            if (deploySpot.HasValue && deckManager.blackHand.Count > 0)
+            {
+                Card cardToDeploy = deckManager.blackHand[0];
+                Vector3 startPos = deckManager.GetTopAICardPosition();
+                deckManager.RemoveCardFromHand("black", 0);
+                
+                yield return StartCoroutine(handVisuals.AnimateAIDeploy(startPos, deploySpot.Value, cardToDeploy.pieceType));
+                
+                if(audioManager) audioManager.PlayPieceImpact();
 
-        string[] parts = pieceToPlaceName.Split('_');
-        string colorToPlace = parts[0];
-        string typeToPlace = parts[1];
+                int x = (int)deploySpot.Value.x;
+                int y = (int)deploySpot.Value.y;
+                pieceManager.CreatePiece("black_" + cardToDeploy.pieceType, x, y);
+                
+                highlighter.HighlightEnemyDeploy(x, y);
+                yield return new WaitForSeconds(0.2f);
+            }
+        }
+        currentPhase = GamePhase.SetupDeploy;
+        uiManager.SetPhaseText("Deploy Your Hand!");
+    }
 
-        if (colorToPlace == "white" && y > 2) return false;
-        if (colorToPlace == "black" && y < 5) return false;
+    void StartPlayerTurn()
+    {
+        currentPlayer = "white";
+        deckManager.DrawCard("white", 1);
+        if(audioManager) audioManager.PlayDeckDeal(); 
+        handVisuals.RefreshPlayerHand(deckManager.whiteHand);
+        
+        if (deckManager.whiteHand.Count > 0)
+        {
+            currentPhase = GamePhase.PlayerTurnDeploy;
+            uiManager.SetPhaseText("Deploy 1 Card");
+        }
+        else
+        {
+            currentPhase = GamePhase.PlayerTurnMove;
+            uiManager.SetPhaseText("Make Your Move");
+        }
+        uiManager.SetTurnText("Turn: White");
+    }
 
-        if (typeToPlace == "pawn" && (y == 0 || y == 7)) return false;
+    void StartGameLoop() {
+        StartPlayerTurn(); 
+    }
 
+    void StartAITurn()
+    {
+        currentPlayer = "black";
+        currentPhase = GamePhase.AITurn;
+        uiManager.SetTurnText("Turn: Black");
+        uiManager.SetPhaseText("AI Thinking...");
+        StartCoroutine(AITurnSequence());
+    }
+
+    IEnumerator AITurnSequence()
+    {
+        deckManager.DrawCard("black", 1);
+        if(audioManager) audioManager.PlayDeckDeal(); 
+
+        yield return new WaitForSeconds(0.5f);
+        uiManager.SetPhaseText("AI Deploying...");
+        
+        highlighter.ClearLastDeploy();
+        
+        Vector3? deploySpot = GetValidAIDeploySpot();
+        if (deploySpot.HasValue && deckManager.blackHand.Count > 0)
+        {
+            Card cardToDeploy = deckManager.blackHand[0];
+            Vector3 startPos = deckManager.GetTopAICardPosition();
+            deckManager.RemoveCardFromHand("black", 0); 
+            
+            yield return StartCoroutine(handVisuals.AnimateAIDeploy(startPos, deploySpot.Value, cardToDeploy.pieceType));
+            if(audioManager) audioManager.PlayPieceImpact(); 
+
+            int x = (int)deploySpot.Value.x;
+            int y = (int)deploySpot.Value.y;
+            pieceManager.CreatePiece("black_" + cardToDeploy.pieceType, x, y);
+            highlighter.HighlightEnemyDeploy(x, y);
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        uiManager.SetPhaseText("AI Moving...");
+        TriggerStockfish();
+    }
+
+    // --- LOGIC HELPERS ---
+
+    public bool TryDeployCard(Card card, int handIndex, Vector3 dropPosition)
+    {
+        if (currentPhase != GamePhase.SetupDeploy && currentPhase != GamePhase.PlayerTurnDeploy) return false;
+        if (currentPlayer != "white") return false;
+
+        int x = Mathf.RoundToInt(dropPosition.x);
+        int y = Mathf.RoundToInt(dropPosition.y);
+
+        if (CanPlacePiece(x, y, "white", card.pieceType))
+        {
+            pieceManager.CreatePiece("white_" + card.pieceType, x, y);
+            deckManager.whiteHand.RemoveAt(handIndex);
+            
+            handVisuals.RefreshPlayerHand(deckManager.whiteHand);
+            highlighter.ClearMoveHints();
+            highlighter.CreateHighlight(x, y, new Color(0f, 1f, 0f, 0.4f), BoardHighlighter.HighlightType.FullSquare, false);
+
+            if(audioManager) audioManager.PlayPieceImpact(); 
+
+            if (currentPhase == GamePhase.SetupDeploy)
+            {
+                if (deckManager.whiteHand.Count == 0) StartGameLoop();
+            }
+            else if (currentPhase == GamePhase.PlayerTurnDeploy)
+            {
+                currentPhase = GamePhase.PlayerTurnMove;
+                uiManager.SetPhaseText("Make Your Move");
+            }
+            return true; 
+        }
+        return false; 
+    }
+
+    // ... (GenerateBoard, SpawnKings, HandlePlayerMoveInput, CanPlacePiece, GetValidAIDeploySpot remain unchanged) ...
+    // Note: I have hidden them to keep this snippet clean, but you should keep the logic from your previous file.
+    
+    void GenerateBoard() {
+        for (int x = 0; x < 8; x++) {
+            for (int y = 0; y < 8; y++) {
+                GameObject newTile = Instantiate(tilePrefab, new Vector3(x, y, 0), Quaternion.identity);
+                newTile.name = $"Tile {x},{y}";
+                if (useCustomBoardArt && newTile.GetComponent<SpriteRenderer>()) 
+                    newTile.GetComponent<SpriteRenderer>().enabled = false;
+                else if ((x + y) % 2 != 0) 
+                    newTile.GetComponent<SpriteRenderer>().color = new Color(0.6f, 0.6f, 0.6f);
+                pieceManager.RegisterTile(x, y, newTile);
+            }
+        }
+    }
+
+    void SpawnKingsAndGuards() {
+        pieceManager.CreatePiece("white_king", 4, 0);
+        pieceManager.CreatePiece("black_king", 4, 7);
+        pieceManager.CreatePiece("black_pawn", 3, 5);
+        pieceManager.CreatePiece("black_pawn", 4, 6);
+        pieceManager.CreatePiece("black_pawn", 5, 5);
+    }
+
+    Vector3? GetValidAIDeploySpot() {
+        if (deckManager.blackHand.Count == 0) return null;
+        Card card = deckManager.blackHand[0];
+        for (int i = 0; i < 50; i++) {
+            int x = Random.Range(0, 8); int y = Random.Range(5, 8);
+            if (CanPlacePiece(x, y, "black", card.pieceType)) return new Vector3(x, y, 0);
+        }
+        return null;
+    }
+
+    public bool CanPlacePiece(int x, int y, string color, string type) {
+        if (!pieceManager.PositionOnBoard(x, y)) return false;
+        if (pieceManager.GetPosition(x, y) != null) return false;
+        if (color == "white" && y > 2) return false;
+        if (color == "black" && y < 5) return false;
+        if (type == "pawn" && (y == 0 || y == 7)) return false;
         return true;
     }
 
-    public void StartGame()
-    {
-        isSetupPhase = false;
-        startButton.SetActive(false);
-        
-        GameObject[] bankObjs = GameObject.FindGameObjectsWithTag("Bank"); 
-        foreach(GameObject g in bankObjs) Destroy(g);
-        
-        boardConverter.fullmoveNumber = 1;
-        boardConverter.halfmoveClock = 0;
-
-        currentPlayer = "white";
-        if(turnIndicator) turnIndicator.text = "Turn: White";
-        
-        // Check if White is somehow mated instantly (Unlikely, but consistent)
-        TriggerOracle();
-    }
-
-    // =========================================================
-    //                PHASE 2: GAMEPLAY + AI LOGIC
-    // =========================================================
-
-    void UpdateGameplayPhase()
-    {
-        // Only block input if it is strictly the AI's turn to MOVE
-        if (currentPlayer == "black") return;
-        
-        // Note: We do NOT block input while "waitingForAI" during White's turn.
-        // We let the player think/move while Stockfish checks for mate in the background.
-
-        if (Input.GetMouseButtonDown(0))
-        {
+    void HandlePlayerMoveInput() {
+        if (Input.GetMouseButtonDown(0)) {
             Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-            Vector2 mousePos2D = new Vector2(mousePos.x, mousePos.y);
-            RaycastHit2D hit = Physics2D.Raycast(mousePos2D, Vector2.zero);
-
-            if (hit.collider != null)
-            {
-                if (hit.collider.GetComponent<ChessPiece>() != null)
-                {
-                    if (hit.collider.GetComponent<ChessPiece>().player == currentPlayer)
-                    {
-                        hit.collider.GetComponent<ChessPiece>().InitiateMovePlates();
-                    }
+            RaycastHit2D hit = Physics2D.Raycast(mousePos, Vector2.zero);
+            if (hit.collider != null && hit.collider.GetComponent<ChessPiece>() != null) {
+                if (hit.collider.GetComponent<ChessPiece>().player == currentPlayer) {
+                    hit.collider.GetComponent<ChessPiece>().InitiateMovePlates();
                 }
             }
         }
     }
 
-    public void NextTurn()
-    {
-        currentPlayer = (currentPlayer == "white") ? "black" : "white";
-        if(turnIndicator) turnIndicator.text = "Turn: " + char.ToUpper(currentPlayer[0]) + currentPlayer.Substring(1);
-
-        // Always ask Stockfish to evaluate the position
-        TriggerOracle();
+    void TriggerStockfish() {
+        string fen = boardConverter.BoardToFEN(pieceManager.GetAllPieces(), currentPlayer);
+        stockfishManager.GetBestMove(fen, OnAIMoveReceived);
     }
 
-    void TriggerOracle()
-    {
-        // We set this flag so we know we are expecting a reply
-        // But we only strictly block Input if it's the AI's turn
-        if(currentPlayer == "black") waitingForAI = true;
-
-        string fen = boardConverter.BoardToFEN(pieces, currentPlayer);
-        stockfishManager.GetBestMove(fen, OnStockfishResponse);
-    }
-
-    void OnStockfishResponse(string uciMove)
-    {
-        // 1. CHECK FOR CHECKMATE / STALEMATE
-        // Stockfish returns "(none)" or "none" if there are no legal moves
-        if (uciMove == "(none)" || uciMove == "none")
-        {
-            Debug.Log("Stockfish returned (none). Checkmate detected!");
-            
-            // If it's White's turn and no moves -> White Lost
-            if (currentPlayer == "white") Winner("black");
-            
-            // If it's Black's turn and no moves -> Black Lost
-            else Winner("white");
-            
-            waitingForAI = false;
-            return;
-        }
-
-        if (string.IsNullOrEmpty(uciMove))
-        {
-            Debug.LogError("Stockfish failed to return a move.");
-            waitingForAI = false;
-            return;
-        }
-
-        // 2. HANDLE MOVES BASED ON TURN
-        if (currentPlayer == "black")
-        {
-            // AI Turn: Execute the move
-            if (boardConverter.ParseUCIMove(uciMove, out int fromX, out int fromY, out int toX, out int toY, out char promotion))
-            {
-                ExecuteAIMove(fromX, fromY, toX, toY, promotion);
-            }
-        }
-        else
-        {
-            // Human Turn: Do nothing. 
-            // We just wanted to confirm we weren't checkmated.
-            // (Optional: You could log "Hint: Stockfish suggests " + uciMove);
-        }
-    }
-
-    void ExecuteAIMove(int fromX, int fromY, int toX, int toY, char promotion)
-    {
-        GameObject aiPiece = GetPosition(fromX, fromY);
-        GameObject targetPiece = GetPosition(toX, toY);
+    void OnAIMoveReceived(StockfishResult result) {
+        if (!result.success || result.bestmove == "(none)" || result.bestmove == "none") { Winner("white"); return; }
         
-        if (targetPiece != null)
-        {
-            // FAILSAFE: If logic somehow missed a mate, but AI captures King, declare win.
-            if (targetPiece.name.Contains("king"))
-            {
-                Destroy(targetPiece);
-                Winner("black"); 
-                return;
-            }
-            Destroy(targetPiece);
-        }
-
-        MovePiece(aiPiece, toX, toY);
+        string uciMove = result.bestmove;
         
-        if(promotion == 'q')
-        {
-            Destroy(aiPiece);
-            CreatePiece("black_queen", toX, toY);
-            pieces[toX, toY] = GetPosition(toX, toY); 
-        }
-        
-        waitingForAI = false;
-    }
+        // CHECK POTENTIAL MATE: 
+        // If Stockfish says "Mate in X" (positive value), it thinks it is winning.
+        // We will pass this to the mover to verify AFTER the move is made.
+        bool aiClaimsMate = (result.mate != null && result.mate > 0);
 
-    public void MovePiece(GameObject piece, int x, int y)
-    {
-        ChessPiece cp = piece.GetComponent<ChessPiece>();
-        
-        SetPosition(cp.GetXBoard(), cp.GetYBoard(), null);
-        cp.SetXBoard(x);
-        cp.SetYBoard(y);
-        cp.SetCoords(); 
-        SetPosition(x, y, piece);
-
-        NextTurn();
-    }
-    
-    // Core Helpers
-    public void GenerateBoard() {
-        for (int x = 0; x < 8; x++) {
-            for (int y = 0; y < 8; y++) {
-                GameObject newTile = Instantiate(tilePrefab, new Vector3(x, y, 0), Quaternion.identity);
-                newTile.name = $"Tile {x},{y}";
-                if ((x + y) % 2 != 0) newTile.GetComponent<SpriteRenderer>().color = new Color(0.6f, 0.6f, 0.6f);
-                positions[x, y] = newTile;
-            }
+        if (boardConverter.ParseUCIMove(uciMove, out int fromX, out int fromY, out int toX, out int toY, out char promotion)) {
+            ExecuteAIMove(fromX, fromY, toX, toY, promotion, aiClaimsMate);
         }
     }
 
-    public void CreatePiece(string name, int x, int y) {
-        GameObject obj = Instantiate(chesspiece, new Vector3(0,0,-1), Quaternion.identity);
-        ChessPiece cm = obj.GetComponent<ChessPiece>();
-        obj.name = name; 
-        cm.SetXBoard(x);
-        cm.SetYBoard(y);
-        cm.Activate();
-        pieces[x, y] = obj;
-    }
-
-    public bool PositionOnBoard(int x, int y) {
-        if (x < 0 || y < 0 || x >= 8 || y >= 8) return false;
-        return true;
-    }
-
-    public GameObject GetPosition(int x, int y) {
-        if (!PositionOnBoard(x,y)) return null;
-        return pieces[x, y];
-    }
-
-    public void SetPosition(int x, int y, GameObject obj) {
-        pieces[x, y] = obj;
-    }
-
-    public void RestartGame()
-    {
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
-    }
-
-    public void Winner(string playerWinner) {
-        gameOver = true;
-        gameOverPanel.SetActive(true);
-        winnerText.text = playerWinner + " wins!";
-    }
+    public void RestartGame() { SceneManager.LoadScene(SceneManager.GetActiveScene().name); }
+    public void QuitGame() { Application.Quit(); }
+    public void Winner(string playerWinner) { uiManager.ShowVictory(playerWinner); }
+    public bool IsPlayerTurn() { return (currentPlayer == "white" && currentPhase == GamePhase.PlayerTurnMove); }
 }
