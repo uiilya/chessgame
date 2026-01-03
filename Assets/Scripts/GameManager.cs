@@ -35,6 +35,10 @@ public class GameManager : MonoBehaviour
         if(!uiManager) uiManager = GetComponent<UIManager>();
         if(!handVisuals) handVisuals = GetComponent<HandVisualsManager>();
 
+        // Link dependencies
+        if(handVisuals.audioManager == null) handVisuals.audioManager = audioManager;
+        if(handVisuals.deckManager == null) handVisuals.deckManager = deckManager;
+
         boardConverter = new BoardStateConverter();
         
         GenerateBoard();
@@ -47,6 +51,8 @@ public class GameManager : MonoBehaviour
         }
 
         deckManager.InitializeDecks();
+        handVisuals.InitializeDeckVisuals(deckManager.whiteDeck.Count, deckManager.blackDeck.Count);
+
         StartSetupPhase();
     }
 
@@ -63,10 +69,18 @@ public class GameManager : MonoBehaviour
     public bool PositionOnBoard(int x, int y) => pieceManager.PositionOnBoard(x, y);
     public GameObject GetPosition(int x, int y) => pieceManager.GetPosition(x, y);
     
-    public void CapturePiece(GameObject piece) 
+    // UPDATED: CapturePiece simply handles destruction/audio now.
+    // It returns TRUE if the piece captured was a King.
+    public bool CapturePiece(GameObject piece) 
     {
+        if (piece == null) return false;
+
+        bool isKing = piece.name.ToLower().Contains("king");
+        
         if(audioManager) audioManager.PlayPieceImpact();
         pieceManager.CapturePiece(piece);
+
+        return isKing;
     }
     
     public void PlayMoveSound()
@@ -74,8 +88,38 @@ public class GameManager : MonoBehaviour
         if(audioManager) audioManager.PlayPieceMove();
     }
 
+    // NEW: Handles automatic promotion to Queen for both Player and AI
+    public void CheckPawnPromotion(GameObject piece, int x, int y)
+    {
+        if (piece == null) return;
+        
+        ChessPiece cp = piece.GetComponent<ChessPiece>();
+        // Ensure we only promote pawns
+        if (piece.name.ToLower().Contains("pawn"))
+        {
+            // White Promotes at Y=7, Black at Y=0
+            if ((cp.player == "white" && y == 7) || (cp.player == "black" && y == 0))
+            {
+                if(audioManager) audioManager.PlayPieceImpact(); // Optional: Sound for promotion
+
+                string color = cp.player;
+                Destroy(piece);
+                
+                // Create Queen
+                string newPieceName = color + "_queen";
+                pieceManager.CreatePiece(newPieceName, x, y);
+                
+                // Safety: Ensure the piece manager registers the new piece at this location
+                // (Mirroring the logic previously used in AIMoveSequence)
+                GameObject newPiece = pieceManager.GetPosition(x, y);
+                pieceManager.SetPosition(x, y, newPiece);
+            }
+        }
+    }
+
     public void MovePiece(GameObject piece, int x, int y)
     {
+        if (gameOver) return;
         StartCoroutine(MoveSequence(piece, x, y));
     }
 
@@ -85,18 +129,51 @@ public class GameManager : MonoBehaviour
         int startX = cp.GetXBoard();
         int startY = cp.GetYBoard();
 
+        GameObject target = pieceManager.GetPosition(x, y);
+        bool kingCaptured = false;
+        string winner = "";
+
+        // 1. Handle Capture
+        if (target != null) 
+        {
+            ChessPiece targetCp = target.GetComponent<ChessPiece>();
+            // Check win condition BEFORE destroying the object
+            if (target.name.ToLower().Contains("king"))
+            {
+                kingCaptured = true;
+                // If target is white, black wins. If target is black, white wins.
+                winner = (targetCp != null && targetCp.player == "white") ? "black" : "white";
+            }
+            CapturePiece(target); 
+        }
+
+        // 2. Perform Visual Move (ALWAYS run this, even if game is over)
         yield return StartCoroutine(pieceManager.MovePieceLogic(piece, x, y));
+        
+        // NEW: Check for Promotion
+        CheckPawnPromotion(piece, x, y);
 
         highlighter.HighlightLastMove(startX, startY, x, y);
         highlighter.ClearMoveHints(); 
 
-        if (currentPlayer == "white") StartAITurn();
-        else StartPlayerTurn();
+        // 3. Check Game Over AFTER visuals are done
+        if (kingCaptured)
+        {
+            // Small delay so the player sees the piece land on the king
+            yield return new WaitForSeconds(0.5f);
+            Winner(winner);
+        }
+        else
+        {
+            // Continue game
+            if (currentPlayer == "white") StartAITurn();
+            else StartPlayerTurn();
+        }
     }
 
-    // UPDATED: Now accepts aiClaimedMate flag
     void ExecuteAIMove(int fromX, int fromY, int toX, int toY, char promotion, bool aiClaimedMate)
     {
+        if (gameOver) return;
         StartCoroutine(AIMoveSequence(fromX, fromY, toX, toY, promotion, aiClaimedMate));
     }
 
@@ -104,61 +181,42 @@ public class GameManager : MonoBehaviour
     {
         GameObject aiPiece = pieceManager.GetPosition(fromX, fromY);
         GameObject target = pieceManager.GetPosition(toX, toY);
-        
-        if (target != null) CapturePiece(target);
-        else if(audioManager) audioManager.PlayPieceMove();
+        bool kingCaptured = false;
+        string winner = "";
 
+        // 1. Handle Capture
+        if (target != null) 
+        {
+             ChessPiece targetCp = target.GetComponent<ChessPiece>();
+             if (target.name.ToLower().Contains("king"))
+             {
+                 kingCaptured = true;
+                 winner = (targetCp != null && targetCp.player == "white") ? "black" : "white";
+             }
+             CapturePiece(target);
+        }
+        else if(audioManager) 
+        {
+            audioManager.PlayPieceMove();
+        }
+
+        // 2. Perform Visual Move
         yield return StartCoroutine(pieceManager.MovePieceLogic(aiPiece, toX, toY));
         
         highlighter.HighlightLastMove(fromX, fromY, toX, toY);
 
-        if(promotion == 'q')
-        {
-            Destroy(aiPiece);
-            pieceManager.CreatePiece("black_queen", toX, toY);
-            pieceManager.SetPosition(toX, toY, pieceManager.GetPosition(toX, toY));
-        }
+        // NEW: Use the generic promotion check instead of the promotion char check.
+        // This ensures the visuals always match the "Auto Queen" rule.
+        CheckPawnPromotion(aiPiece, toX, toY);
 
-        // CRITICAL FIX: The "Trust but Verify" Check
-        // If the AI claimed it was going to mate us, we now check the ACTUAL board state.
-        if (aiClaimedMate)
+        // 3. Check Game Over
+        if (kingCaptured)
         {
-            if (stockfishManager.debugMode) Debug.Log("[GameManager] Verifying Checkmate...");
-            VerifyPlayerSurvival();
+            yield return new WaitForSeconds(0.5f);
+            Winner(winner);
         }
         else
         {
-            StartPlayerTurn();
-        }
-    }
-
-    // NEW: Generates FEN for WHITE and asks Stockfish "Can I move?"
-    void VerifyPlayerSurvival()
-    {
-        // 1. Generate FEN for White (Player)
-        string fen = boardConverter.BoardToFEN(pieceManager.GetAllPieces(), "white");
-        
-        // 2. Ask Stockfish for the best move for White
-        stockfishManager.GetBestMove(fen, OnPlayerStatusVerified);
-    }
-
-    void OnPlayerStatusVerified(StockfishResult result)
-    {
-        // 3. Analyze Result
-        // If Stockfish says "bestmove (none)" OR "mate 0", it confirms we are truly stuck.
-        bool isMated = (result.bestmove == "(none)" || result.bestmove == "none");
-        
-        if (!isMated && result.mate != null && result.mate == 0) 
-            isMated = true;
-
-        if (isMated)
-        {
-            if (stockfishManager.debugMode) Debug.Log("[GameManager] Verification Complete: DEFEAT Confirmed.");
-            Winner("black");
-        }
-        else
-        {
-            if (stockfishManager.debugMode) Debug.Log("[GameManager] Verification Complete: AI Blundered! Game Continues.");
             StartPlayerTurn();
         }
     }
@@ -168,14 +226,25 @@ public class GameManager : MonoBehaviour
     void StartSetupPhase() {
         currentPhase = GamePhase.SetupDraw;
         uiManager.SetTurnText("Setup Phase");
-        deckManager.DrawCard("white", 5); deckManager.DrawCard("black", 5);
-        if(audioManager) audioManager.PlayDeckDeal(); 
-        handVisuals.RefreshPlayerHand(deckManager.whiteHand);
+        
+        deckManager.DrawCard("white", 5); 
+        deckManager.DrawCard("black", 5);
+        
         StartCoroutine(AnimateSetupPhase());
     }
 
     IEnumerator AnimateSetupPhase()
     {
+        uiManager.SetPhaseText("Drawing Hand...");
+        
+        int whiteCount = deckManager.whiteHand.Count;
+        if (whiteCount > 0)
+            yield return StartCoroutine(handVisuals.AnimateDraw(deckManager.whiteHand, whiteCount));
+        
+        int blackCount = deckManager.blackHand.Count;
+        if (blackCount > 0)
+            yield return StartCoroutine(handVisuals.AnimateAIDraw(deckManager.blackHand.Count, blackCount));
+
         uiManager.SetPhaseText("Opponent Deploying...");
         for (int i = 0; i < 5; i++)
         {
@@ -183,7 +252,8 @@ public class GameManager : MonoBehaviour
             if (deploySpot.HasValue && deckManager.blackHand.Count > 0)
             {
                 Card cardToDeploy = deckManager.blackHand[0];
-                Vector3 startPos = deckManager.GetTopAICardPosition();
+                Vector3 startPos = handVisuals.GetAIHandPosition(0);
+                handVisuals.RemoveAIHandCard(0);
                 deckManager.RemoveCardFromHand("black", 0);
                 
                 yield return StartCoroutine(handVisuals.AnimateAIDeploy(startPos, deploySpot.Value, cardToDeploy.pieceType));
@@ -204,20 +274,32 @@ public class GameManager : MonoBehaviour
 
     void StartPlayerTurn()
     {
+        if (gameOver) return;
+        StartCoroutine(PlayerTurnSequence());
+    }
+
+    IEnumerator PlayerTurnSequence()
+    {
         currentPlayer = "white";
-        deckManager.DrawCard("white", 1);
-        if(audioManager) audioManager.PlayDeckDeal(); 
-        handVisuals.RefreshPlayerHand(deckManager.whiteHand);
         
+        int countBefore = deckManager.whiteHand.Count;
+        deckManager.DrawCard("white", 1);
+        int cardsDrawn = deckManager.whiteHand.Count - countBefore;
+        
+        uiManager.SetPhaseText("Drawing...");
+        
+        if (cardsDrawn > 0)
+            yield return StartCoroutine(handVisuals.AnimateDraw(deckManager.whiteHand, cardsDrawn));
+
         if (deckManager.whiteHand.Count > 0)
         {
             currentPhase = GamePhase.PlayerTurnDeploy;
-            uiManager.SetPhaseText("Deploy 1 Card");
+            uiManager.SetPhaseText("Drag and drop to deploy 1 card!");
         }
         else
         {
             currentPhase = GamePhase.PlayerTurnMove;
-            uiManager.SetPhaseText("Make Your Move");
+            uiManager.SetPhaseText("No cards left! Move your pieces.");
         }
         uiManager.SetTurnText("Turn: White");
     }
@@ -228,6 +310,7 @@ public class GameManager : MonoBehaviour
 
     void StartAITurn()
     {
+        if (gameOver) return;
         currentPlayer = "black";
         currentPhase = GamePhase.AITurn;
         uiManager.SetTurnText("Turn: Black");
@@ -237,10 +320,14 @@ public class GameManager : MonoBehaviour
 
     IEnumerator AITurnSequence()
     {
+        int countBefore = deckManager.blackHand.Count;
         deckManager.DrawCard("black", 1);
-        if(audioManager) audioManager.PlayDeckDeal(); 
+        int cardsDrawn = deckManager.blackHand.Count - countBefore;
+        
+        if (cardsDrawn > 0)
+            yield return StartCoroutine(handVisuals.AnimateAIDraw(deckManager.blackHand.Count, cardsDrawn));
 
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSeconds(0.3f);
         uiManager.SetPhaseText("AI Deploying...");
         
         highlighter.ClearLastDeploy();
@@ -249,7 +336,8 @@ public class GameManager : MonoBehaviour
         if (deploySpot.HasValue && deckManager.blackHand.Count > 0)
         {
             Card cardToDeploy = deckManager.blackHand[0];
-            Vector3 startPos = deckManager.GetTopAICardPosition();
+            Vector3 startPos = handVisuals.GetAIHandPosition(0);
+            handVisuals.RemoveAIHandCard(0);
             deckManager.RemoveCardFromHand("black", 0); 
             
             yield return StartCoroutine(handVisuals.AnimateAIDeploy(startPos, deploySpot.Value, cardToDeploy.pieceType));
@@ -282,6 +370,7 @@ public class GameManager : MonoBehaviour
             deckManager.whiteHand.RemoveAt(handIndex);
             
             handVisuals.RefreshPlayerHand(deckManager.whiteHand);
+            
             highlighter.ClearMoveHints();
             highlighter.CreateHighlight(x, y, new Color(0f, 1f, 0f, 0.4f), BoardHighlighter.HighlightType.FullSquare, false);
 
@@ -294,16 +383,13 @@ public class GameManager : MonoBehaviour
             else if (currentPhase == GamePhase.PlayerTurnDeploy)
             {
                 currentPhase = GamePhase.PlayerTurnMove;
-                uiManager.SetPhaseText("Make Your Move");
+                uiManager.SetPhaseText("Move a piece on the board.");
             }
             return true; 
         }
         return false; 
     }
 
-    // ... (GenerateBoard, SpawnKings, HandlePlayerMoveInput, CanPlacePiece, GetValidAIDeploySpot remain unchanged) ...
-    // Note: I have hidden them to keep this snippet clean, but you should keep the logic from your previous file.
-    
     void GenerateBoard() {
         for (int x = 0; x < 8; x++) {
             for (int y = 0; y < 8; y++) {
@@ -366,10 +452,6 @@ public class GameManager : MonoBehaviour
         if (!result.success || result.bestmove == "(none)" || result.bestmove == "none") { Winner("white"); return; }
         
         string uciMove = result.bestmove;
-        
-        // CHECK POTENTIAL MATE: 
-        // If Stockfish says "Mate in X" (positive value), it thinks it is winning.
-        // We will pass this to the mover to verify AFTER the move is made.
         bool aiClaimsMate = (result.mate != null && result.mate > 0);
 
         if (boardConverter.ParseUCIMove(uciMove, out int fromX, out int fromY, out int toX, out int toY, out char promotion)) {
@@ -379,6 +461,9 @@ public class GameManager : MonoBehaviour
 
     public void RestartGame() { SceneManager.LoadScene(SceneManager.GetActiveScene().name); }
     public void QuitGame() { Application.Quit(); }
-    public void Winner(string playerWinner) { uiManager.ShowVictory(playerWinner); }
+    public void Winner(string playerWinner) { 
+        gameOver = true;
+        uiManager.ShowVictory(playerWinner); 
+    }
     public bool IsPlayerTurn() { return (currentPlayer == "white" && currentPhase == GamePhase.PlayerTurnMove); }
 }

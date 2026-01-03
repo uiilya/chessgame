@@ -8,15 +8,15 @@ public class CardObject : MonoBehaviour
     public Card cardData;
     public int handIndex;
     
-    // Visual References
-    public SpriteRenderer cardArt; 
-    public SpriteRenderer borderSprite;      
-    public SpriteRenderer backgroundSprite;  
+    // --- UPDATED VISUAL REFERENCES ---
+    public SpriteRenderer cardArt;    // The separate Card Illustration
+    public SpriteRenderer cardBase;   // The new Background (includes Border)
 
     public TextMeshPro nameText;
     public TextMeshPro descriptionText;
     public TextMeshPro costText;
 
+    // Generic list for any extra decorative icons you might add later
     public List<GameObject> visualsToHide; 
 
     // State Variables
@@ -28,27 +28,28 @@ public class CardObject : MonoBehaviour
     private GameManager manager;
     private GameObject currentHighlight = null;
 
+    private bool isInitialized = false;
+
     [Header("Hover Settings")]
     public float hoverStrength = 0.1f; 
     public float hoverSpeed = 2.5f;    
     public float hoverScale = 1.2f;    
-    public float dragOffsetX = 0.5f; // Visual offset while dragging
+    public float dragOffsetX = 0.5f; 
 
     void Awake()
     {
         originalScale = transform.localScale;
 
-        // --- AUTO-FIND VISUALS ---
-        if (borderSprite == null)
+        // --- UPDATED AUTO-FIND LOGIC ---
+        // We look for "CardBase" (renamed from Background)
+        if (cardBase == null)
         {
-            Transform t = transform.Find("Border");
-            if (t != null) borderSprite = t.GetComponent<SpriteRenderer>();
+            Transform t = transform.Find("CardBase"); 
+            // Fallback for backward compatibility if you haven't renamed it yet
+            if (t == null) t = transform.Find("Background"); 
+            if (t != null) cardBase = t.GetComponent<SpriteRenderer>();
         }
-        if (backgroundSprite == null)
-        {
-            Transform t = transform.Find("Background");
-            if (t != null) backgroundSprite = t.GetComponent<SpriteRenderer>();
-        }
+
         if (cardArt == null)
         {
             Transform t = transform.Find("Portrait");
@@ -58,11 +59,15 @@ public class CardObject : MonoBehaviour
 
     void Start()
     {
-        manager = GameObject.FindGameObjectWithTag("GameController").GetComponent<GameManager>();
+        // Safety check to prevent crash if GameManager isn't found
+        GameObject gc = GameObject.FindGameObjectWithTag("GameController");
+        if (gc != null) manager = gc.GetComponent<GameManager>();
     }
 
     void Update()
     {
+        if (!isInitialized) return;
+
         if (!isDragging)
         {
             float timeOffset = handIndex * 0.5f;
@@ -71,16 +76,24 @@ public class CardObject : MonoBehaviour
         }
     }
 
-    public void Setup(Card data, int index, Sprite art, int sortingOrder)
-    {
-        cardData = data;
-        handIndex = index;
-        originalSortingOrder = sortingOrder; 
+    // Call this with the SPECIFIC card art sprite, not the chess piece sprite
+    public void Setup(Card data, int index, int sortingOrder)
+{
+    cardData = data;
+    handIndex = index;
+    originalSortingOrder = sortingOrder; 
 
-        if(cardArt != null) cardArt.sprite = art;
-        UpdateVisuals();
-        UpdateSorting(sortingOrder);
+    // Use the sprite directly from the Card Data object
+    if(cardArt != null && cardData.cardArt != null) 
+    {
+        cardArt.sprite = cardData.cardArt;
     }
+    
+    UpdateVisuals();
+    UpdateSorting(sortingOrder);
+
+    isInitialized = true;
+}
 
     void UpdateVisuals()
     {
@@ -92,11 +105,11 @@ public class CardObject : MonoBehaviour
 
     void UpdateSorting(int order)
     {
-        // 1. Root Renderer (if exists) -> Base Layer
+        // 1. Root Renderer -> Base Layer
         SpriteRenderer rootSr = GetComponent<SpriteRenderer>();
         if (rootSr != null) rootSr.sortingOrder = order;
 
-        // 2. Generic Visuals -> Default to Middle Layer (Order + 1)
+        // 2. Generic Visuals -> Middle Layer
         foreach(var g in visualsToHide)
         {
             if (g == null) continue;
@@ -104,19 +117,16 @@ public class CardObject : MonoBehaviour
             if(sr) sr.sortingOrder = order + 1;
         }
 
-        // --- STRICT LAYERING OVERRIDES ---
+        // --- NEW STRICT LAYERING ---
         
-        // Layer 0: Border (Bottom)
-        if (borderSprite != null) borderSprite.sortingOrder = order;
+        // Layer 0: The Base (Background + Border merged)
+        if (cardBase != null) cardBase.sortingOrder = order;
 
-        // Layer 1: Background (Middle)
-        if (backgroundSprite != null) backgroundSprite.sortingOrder = order + 1;
+        // Layer 1: The Portrait (Sits on top of the base)
+        if (cardArt != null) cardArt.sortingOrder = order + 1;
 
-        // Layer 2: Portrait (Top)
-        if (cardArt != null) cardArt.sortingOrder = order + 2;
-
-        // Layer 3: Text (Overlay)
-        int textOrder = order + 3;
+        // Layer 2: Text (Sits on top of everything)
+        int textOrder = order + 2;
         if(nameText) nameText.GetComponent<MeshRenderer>().sortingOrder = textOrder;
         if(descriptionText) descriptionText.GetComponent<MeshRenderer>().sortingOrder = textOrder;
         if(costText) costText.GetComponent<MeshRenderer>().sortingOrder = textOrder;
@@ -125,8 +135,8 @@ public class CardObject : MonoBehaviour
     // --- HELPER TO TOGGLE CARD SHELL ---
     void SetDecorationsActive(bool isActive)
     {
-        if (borderSprite != null) borderSprite.enabled = isActive;
-        if (backgroundSprite != null) backgroundSprite.enabled = isActive;
+        // Hide the single base object
+        if (cardBase != null) cardBase.enabled = isActive;
         
         if (nameText != null) nameText.enabled = isActive;
         if (descriptionText != null) descriptionText.enabled = isActive;
@@ -144,7 +154,7 @@ public class CardObject : MonoBehaviour
     {
         if (isDragging) return;
         transform.localScale = originalScale * hoverScale;
-        UpdateSorting(originalSortingOrder + 20); // Pop to front
+        UpdateSorting(originalSortingOrder + 50); // Pop to front
     }
 
     void OnMouseExit()
@@ -172,13 +182,11 @@ public class CardObject : MonoBehaviour
 
         Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
         
-        // Apply Bobbing logic
         float dragBobY = mousePos.y + Mathf.Sin(Time.time * hoverSpeed) * hoverStrength;
         
-        // Apply visual offset so card isn't directly under cursor
+        // Keep the drag offset logic from your original script
         transform.position = new Vector3(mousePos.x + dragOffsetX, dragBobY, -5.0f); 
 
-        // NOTE: We calculate 'x' and 'y' based on the TRUE mouse position, not the offset card position
         int x = Mathf.RoundToInt(mousePos.x);
         int y = Mathf.RoundToInt(mousePos.y);
         
@@ -204,9 +212,6 @@ public class CardObject : MonoBehaviour
         isDragging = false;
         if (currentHighlight != null) Destroy(currentHighlight);
 
-        // FIX: Use 'mousePos' (Cursor) instead of 'transform.position' (Card Visual).
-        // This ensures the drop location matches exactly where the mouse pointer is,
-        // ignoring the dragOffsetX and bobbing effect.
         Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
 
         bool success = manager.TryDeployCard(cardData, handIndex, mousePos);

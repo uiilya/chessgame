@@ -24,11 +24,14 @@ public class StockfishManager : MonoBehaviour
     private int? lastEval = null;
     private bool moveReceived = false;
 
-    // ADDED: Static variable to persist skill level across scene reloads
+    // Persist skill level across scene reloads
     public static int persistedSkillLevel = 10;
 
     [Header("Stockfish Settings")]
-    public string stockfishPath = "stockfish.exe"; 
+    public string stockfishPath = "fairy-stockfish.exe"; // CHANGED: Default to fairy-stockfish
+    public string variantConfig = "variants.ini";        // NEW: Path to your variants file
+    public string variantName = "cardchess";             // NEW: Name of the variant in the .ini
+    
     [Range(0, 20)]
     public int skillLevel = 10;
     public int thinkingTime = 500; // ms
@@ -38,7 +41,6 @@ public class StockfishManager : MonoBehaviour
 
     void Start()
     {
-        // Sync with persisted value from Debug UI
         skillLevel = persistedSkillLevel;
         InitializeStockfish();
     }
@@ -47,17 +49,21 @@ public class StockfishManager : MonoBehaviour
     {
         try
         {
-            string exePath = Path.Combine(Application.streamingAssetsPath, stockfishPath);
+            // Path to StreamingAssets
+            string folderPath = Application.streamingAssetsPath;
+            string exePath = Path.Combine(folderPath, stockfishPath);
+            string variantPath = Path.Combine(folderPath, variantConfig);
             
             if (!File.Exists(exePath))
             {
-                UnityEngine.Debug.LogError("Stockfish not found at: " + exePath);
+                UnityEngine.Debug.LogError("Fairy-Stockfish not found at: " + exePath);
                 return;
             }
 
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
                 FileName = exePath,
+                WorkingDirectory = folderPath, // Set working dir so it finds local files easier
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -69,11 +75,23 @@ public class StockfishManager : MonoBehaviour
             stockfishInput = stockfishProcess.StandardInput;
             stockfishOutput = stockfishProcess.StandardOutput;
 
+            // --- FAIRY STOCKFISH INITIALIZATION SEQUENCE ---
             SendCommand("uci");
-            SendCommand($"setoption name Skill Level value {skillLevel}");
-            SendCommand("isready");
             
-            if (debugMode) UnityEngine.Debug.Log($"Stockfish Initialized. Skill Level: {skillLevel}");
+            // 1. Load the variants file
+            // Note: If spaces exist in path, might need quotes, but usually UCI handles basic paths
+            SendCommand($"setoption name VariantPath value {variantConfig}");
+            
+            // 2. Select the specific variant
+            SendCommand($"setoption name UCI_Variant value {variantName}");
+            
+            // 3. Standard Settings
+            SendCommand($"setoption name Skill Level value {skillLevel}");
+            
+            SendCommand("isready");
+            // -----------------------------------------------
+            
+            if (debugMode) UnityEngine.Debug.Log($"Fairy-Stockfish Initialized. Variant: {variantName}");
         }
         catch (Exception e)
         {
@@ -145,6 +163,9 @@ public class StockfishManager : MonoBehaviour
                 
                 if (line != null)
                 {
+                    // Debug output from engine can be helpful to see if variant loaded
+                    // if (debugMode) UnityEngine.Debug.Log("SF: " + line);
+
                     if (line.StartsWith("info") && line.Contains("score"))
                     {
                         ParseScore(line);

@@ -23,6 +23,14 @@ public class DeckManager : MonoBehaviour
     public GameObject cardBackPrefab; 
     private List<GameObject> aiHandVisuals = new List<GameObject>();
 
+    // --- NEW: Card Art Assets (Drag your images here in Inspector) ---
+    [Header("Card Art Assets")]
+    public Sprite art_Queen;
+    public Sprite art_Rook;
+    public Sprite art_Bishop;
+    public Sprite art_Knight;
+    public Sprite art_Pawn;
+
     // TESTING: Static lists to persist deck choices across scene reloads
     public static List<DeckEntry> savedPlayerDeck = null;
     public static List<DeckEntry> savedAIDeck = null;
@@ -59,11 +67,33 @@ public class DeckManager : MonoBehaviour
     {
         foreach (var entry in setup)
         {
-            if (cardLibrary.ContainsKey(entry.pieceType))
+            // Normalize string to lowercase to match Dictionary keys safely
+            string typeKey = entry.pieceType.ToLower();
+
+            if (cardLibrary.ContainsKey(typeKey))
             {
-                var stats = cardLibrary[entry.pieceType];
-                AddCardToDeck(deckTarget, owner, entry.pieceType, entry.count, stats.cost, stats.desc);
+                var stats = cardLibrary[typeKey];
+                
+                // 1. Get the correct art
+                Sprite specificArt = GetCardArt(typeKey);
+
+                // 2. Pass it to the function (This was missing in your version!)
+                AddCardToDeck(deckTarget, owner, typeKey, entry.count, stats.cost, stats.desc, specificArt);
             }
+        }
+    }
+
+    // --- NEW: Helper to find the right sprite ---
+    private Sprite GetCardArt(string type)
+    {
+        switch (type.ToLower())
+        {
+            case "queen": return art_Queen;
+            case "rook": return art_Rook;
+            case "bishop": return art_Bishop;
+            case "knight": return art_Knight;
+            case "pawn": return art_Pawn;
+            default: return null;
         }
     }
 
@@ -84,12 +114,15 @@ public class DeckManager : MonoBehaviour
         aiDeckSetup.Add(new DeckEntry { pieceType = "pawn", count = 4 });
     }
 
-    void AddCardToDeck(List<Card> deck, string owner, string type, int count, int cost, string desc)
+    // Updated to accept Sprite
+    void AddCardToDeck(List<Card> deck, string owner, string type, int count, int cost, string desc, Sprite art)
     {
         for(int i=0; i<count; i++)
         {
             string name = char.ToUpper(type[0]) + type.Substring(1);
-            deck.Add(new Card(name, type, owner, cost, desc));
+            
+            // Pass 'art' into the Card constructor
+            deck.Add(new Card(name, type, owner, cost, desc, art));
         }
     }
 
@@ -118,7 +151,7 @@ public class DeckManager : MonoBehaviour
             }
         }
         
-        if (player == "black") RefreshAIHandVisuals();
+        // if (player == "black") RefreshAIHandVisuals();
     }
 
     public void RemoveCardFromHand(string player, int index)
@@ -127,7 +160,7 @@ public class DeckManager : MonoBehaviour
         else 
         {
             if (blackHand.Count > 0) blackHand.RemoveAt(0); 
-            RefreshAIHandVisuals();
+            // RefreshAIHandVisuals();
         }
     }
 
@@ -152,7 +185,6 @@ public class DeckManager : MonoBehaviour
             GameObject card = Instantiate(cardBackPrefab, new Vector3(x, startY, z), Quaternion.identity);
             card.name = "AI_Card_" + i;
             
-            // FIX: Remove CardObject script if present, otherwise it teleports to (0,0,0)
             CardObject co = card.GetComponent<CardObject>();
             if (co != null) Destroy(co);
 
@@ -162,6 +194,7 @@ public class DeckManager : MonoBehaviour
             if (sr != null)
             {
                 sr.sortingOrder = 10 + i;
+                // Basic check to fix sorting for children if using complex prefab
                 SpriteRenderer[] children = card.GetComponentsInChildren<SpriteRenderer>();
                 foreach(SpriteRenderer child in children)
                 {
@@ -175,16 +208,13 @@ public class DeckManager : MonoBehaviour
         }
     }
 
-    // FIX: Calculate position mathematically to prevent (0,0) errors if visuals are missing
     public Vector3 GetTopAICardPosition()
     {
         float cardSpacing = 1.0f;
         float startY = 9.0f;
         
-        // If hand is empty, return generic Top Center
         if (blackHand.Count == 0) return new Vector3(3.5f, startY, -2f);
 
-        // Calculate where the FIRST card (index 0) *should* be
         float totalWidth = (blackHand.Count - 1) * cardSpacing;
         float startX = 3.5f - (totalWidth / 2);
 
