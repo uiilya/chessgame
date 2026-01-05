@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using System.Collections; 
+using System.Collections.Generic;
 
 public class GameManager : MonoBehaviour
 {
@@ -26,6 +27,20 @@ public class GameManager : MonoBehaviour
     private string currentPlayer = "white";
     private bool gameOver = false;
 
+    // Stores who won so the Next button knows what to do
+    private string winningPlayer = "";
+
+    private int pointsEarnedThisMatch = 0;
+    
+    private Dictionary<string, int> pieceValues = new Dictionary<string, int>() {
+        { "pawn", 1 },
+        { "knight", 3 },
+        { "bishop", 3 },
+        { "rook", 4 },
+        { "queen", 5 },
+        { "king", 5 }
+    };
+
     void Start()
     {
         if(!pieceManager) pieceManager = GetComponent<PieceManager>();
@@ -35,7 +50,6 @@ public class GameManager : MonoBehaviour
         if(!uiManager) uiManager = GetComponent<UIManager>();
         if(!handVisuals) handVisuals = GetComponent<HandVisualsManager>();
 
-        // Link dependencies
         if(handVisuals.audioManager == null) handVisuals.audioManager = audioManager;
         if(handVisuals.deckManager == null) handVisuals.deckManager = deckManager;
 
@@ -62,25 +76,34 @@ public class GameManager : MonoBehaviour
         if (currentPhase == GamePhase.PlayerTurnMove) HandlePlayerMoveInput();
     }
 
-    // --- DELEGATES & HELPERS ---
     public void ClearMoveHints() => highlighter.ClearMoveHints();
     public GameObject CreateHighlight(int x, int y, Color c, BoardHighlighter.HighlightType t, bool h) 
         => highlighter.CreateHighlight(x, y, c, t, h);
     public bool PositionOnBoard(int x, int y) => pieceManager.PositionOnBoard(x, y);
     public GameObject GetPosition(int x, int y) => pieceManager.GetPosition(x, y);
     
-    // UPDATED: CapturePiece simply handles destruction/audio now.
-    // It returns TRUE if the piece captured was a King.
-    public bool CapturePiece(GameObject piece) 
+    public void CapturePiece(GameObject piece) 
     {
-        if (piece == null) return false;
+        if (piece == null) return;
 
-        bool isKing = piece.name.ToLower().Contains("king");
+        ChessPiece cp = piece.GetComponent<ChessPiece>();
         
+        // Points Calculation
+        if (cp != null && cp.player != "white") 
+        {
+            foreach(var kvp in pieceValues)
+            {
+                if (piece.name.ToLower().Contains(kvp.Key))
+                {
+                    pointsEarnedThisMatch += kvp.Value;
+                    Debug.Log($"Captured {kvp.Key}! Points: {pointsEarnedThisMatch}");
+                    break;
+                }
+            }
+        }
+
         if(audioManager) audioManager.PlayPieceImpact();
         pieceManager.CapturePiece(piece);
-
-        return isKing;
     }
     
     public void PlayMoveSound()
@@ -88,29 +111,23 @@ public class GameManager : MonoBehaviour
         if(audioManager) audioManager.PlayPieceMove();
     }
 
-    // NEW: Handles automatic promotion to Queen for both Player and AI
     public void CheckPawnPromotion(GameObject piece, int x, int y)
     {
         if (piece == null) return;
         
         ChessPiece cp = piece.GetComponent<ChessPiece>();
-        // Ensure we only promote pawns
         if (piece.name.ToLower().Contains("pawn"))
         {
-            // White Promotes at Y=7, Black at Y=0
             if ((cp.player == "white" && y == 7) || (cp.player == "black" && y == 0))
             {
-                if(audioManager) audioManager.PlayPieceImpact(); // Optional: Sound for promotion
+                if(audioManager) audioManager.PlayPieceImpact(); 
 
                 string color = cp.player;
                 Destroy(piece);
                 
-                // Create Queen
                 string newPieceName = color + "_queen";
                 pieceManager.CreatePiece(newPieceName, x, y);
                 
-                // Safety: Ensure the piece manager registers the new piece at this location
-                // (Mirroring the logic previously used in AIMoveSequence)
                 GameObject newPiece = pieceManager.GetPosition(x, y);
                 pieceManager.SetPosition(x, y, newPiece);
             }
@@ -130,42 +147,31 @@ public class GameManager : MonoBehaviour
         int startY = cp.GetYBoard();
 
         GameObject target = pieceManager.GetPosition(x, y);
-        bool kingCaptured = false;
-        string winner = "";
+        bool captured = false;
 
         // 1. Handle Capture
         if (target != null) 
         {
-            ChessPiece targetCp = target.GetComponent<ChessPiece>();
-            // Check win condition BEFORE destroying the object
-            if (target.name.ToLower().Contains("king"))
-            {
-                kingCaptured = true;
-                // If target is white, black wins. If target is black, white wins.
-                winner = (targetCp != null && targetCp.player == "white") ? "black" : "white";
-            }
             CapturePiece(target); 
+            captured = true;
         }
 
-        // 2. Perform Visual Move (ALWAYS run this, even if game is over)
+        // 2. Perform Visual Move
         yield return StartCoroutine(pieceManager.MovePieceLogic(piece, x, y));
-        
-        // NEW: Check for Promotion
-        CheckPawnPromotion(piece, x, y);
 
+        if(!captured && audioManager) {audioManager.PlayPieceImpactOne();}
+        
+        CheckPawnPromotion(piece, x, y);
         highlighter.HighlightLastMove(startX, startY, x, y);
         highlighter.ClearMoveHints(); 
 
-        // 3. Check Game Over AFTER visuals are done
-        if (kingCaptured)
+        // 3. Check for Winner (Multiple Kings Logic)
+        if (CheckWinCondition())
         {
-            // Small delay so the player sees the piece land on the king
-            yield return new WaitForSeconds(0.5f);
-            Winner(winner);
+            // Game Over handled inside CheckWinCondition
         }
         else
         {
-            // Continue game
             if (currentPlayer == "white") StartAITurn();
             else StartPlayerTurn();
         }
@@ -181,18 +187,10 @@ public class GameManager : MonoBehaviour
     {
         GameObject aiPiece = pieceManager.GetPosition(fromX, fromY);
         GameObject target = pieceManager.GetPosition(toX, toY);
-        bool kingCaptured = false;
-        string winner = "";
 
         // 1. Handle Capture
         if (target != null) 
         {
-             ChessPiece targetCp = target.GetComponent<ChessPiece>();
-             if (target.name.ToLower().Contains("king"))
-             {
-                 kingCaptured = true;
-                 winner = (targetCp != null && targetCp.player == "white") ? "black" : "white";
-             }
              CapturePiece(target);
         }
         else if(audioManager) 
@@ -202,18 +200,13 @@ public class GameManager : MonoBehaviour
 
         // 2. Perform Visual Move
         yield return StartCoroutine(pieceManager.MovePieceLogic(aiPiece, toX, toY));
-        
         highlighter.HighlightLastMove(fromX, fromY, toX, toY);
-
-        // NEW: Use the generic promotion check instead of the promotion char check.
-        // This ensures the visuals always match the "Auto Queen" rule.
         CheckPawnPromotion(aiPiece, toX, toY);
 
-        // 3. Check Game Over
-        if (kingCaptured)
+        // 3. Check for Winner
+        if (CheckWinCondition())
         {
-            yield return new WaitForSeconds(0.5f);
-            Winner(winner);
+            // Game Over handled inside
         }
         else
         {
@@ -221,13 +214,41 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // --- GAME FLOW ---
+    bool CheckWinCondition()
+    {
+        GameObject[,] allPieces = pieceManager.GetAllPieces();
+        bool whiteHasKing = false;
+        bool blackHasKing = false;
+
+        foreach(GameObject obj in allPieces)
+        {
+            if (obj != null)
+            {
+                if (obj.name.Contains("white_king")) whiteHasKing = true;
+                if (obj.name.Contains("black_king")) blackHasKing = true;
+            }
+        }
+
+        if (!whiteHasKing)
+        {
+            Winner("black");
+            return true;
+        }
+        if (!blackHasKing)
+        {
+            Winner("white");
+            return true;
+        }
+
+        return false;
+    }
 
     void StartSetupPhase() {
         currentPhase = GamePhase.SetupDraw;
         uiManager.SetTurnText("Setup Phase");
         
-        deckManager.DrawCard("white", 5); 
+        deckManager.DrawSpecificCard("white", "king"); 
+        deckManager.DrawCard("white", 5);              
         deckManager.DrawCard("black", 5);
         
         StartCoroutine(AnimateSetupPhase());
@@ -354,8 +375,6 @@ public class GameManager : MonoBehaviour
         TriggerStockfish();
     }
 
-    // --- LOGIC HELPERS ---
-
     public bool TryDeployCard(Card card, int handIndex, Vector3 dropPosition)
     {
         if (currentPhase != GamePhase.SetupDeploy && currentPhase != GamePhase.PlayerTurnDeploy) return false;
@@ -405,7 +424,6 @@ public class GameManager : MonoBehaviour
     }
 
     void SpawnKingsAndGuards() {
-        pieceManager.CreatePiece("white_king", 4, 0);
         pieceManager.CreatePiece("black_king", 4, 7);
         pieceManager.CreatePiece("black_pawn", 3, 5);
         pieceManager.CreatePiece("black_pawn", 4, 6);
@@ -449,7 +467,11 @@ public class GameManager : MonoBehaviour
     }
 
     void OnAIMoveReceived(StockfishResult result) {
-        if (!result.success || result.bestmove == "(none)" || result.bestmove == "none") { Winner("white"); return; }
+        if (!result.success || result.bestmove == "(none)" || result.bestmove == "none") { 
+            if (CheckWinCondition()) return;
+            Winner("white"); 
+            return; 
+        }
         
         string uciMove = result.bestmove;
         bool aiClaimsMate = (result.mate != null && result.mate > 0);
@@ -459,11 +481,60 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    // --- RESTART / QUIT / NEXT LEVEL ---
+
     public void RestartGame() { SceneManager.LoadScene(SceneManager.GetActiveScene().name); }
     public void QuitGame() { Application.Quit(); }
-    public void Winner(string playerWinner) { 
+    public void ReturnToMenu() { SceneManager.LoadScene("Main Menu"); }
+
+    public void Winner(string playerWinner) 
+    { 
         gameOver = true;
-        uiManager.ShowVictory(playerWinner); 
+        winningPlayer = playerWinner; // Store winner to decide what buttons do
+
+        string message = "DEFEAT";
+        
+        if (playerWinner == "white")
+        {
+            message = "VICTORY!";
+            // Check if this is the final level
+            if (ProgressionManager.Instance != null && 
+                ProgressionManager.Instance.currentLevel >= ProgressionManager.Instance.maxLevels)
+            {
+                message = "CONGRATULATIONS! RUN COMPLETE!";
+            }
+        }
+        
+        uiManager.ShowVictory(message); 
+        
+        // Note: Automatic scene transition is removed. 
+        // Game now waits for user to click "Next" (OnNextLevelButton) or "Exit".
     }
+
+    // LINK THIS TO YOUR "NEXT" BUTTON
+    public void OnNextLevelButton()
+    {
+        if (winningPlayer == "white")
+        {
+            // Player won: Proceed with points
+            int total = pointsEarnedThisMatch + 5;
+            if (ProgressionManager.Instance)
+            {
+                // This handles moving to DeckBuilder OR Main Menu if it was the final level
+                ProgressionManager.Instance.CompleteLevel(total);
+            }
+            else
+            {
+                // Fallback for testing without ProgressionManager
+                SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+            }
+        }
+        else
+        {
+            // Player lost: Return to Main Menu
+            SceneManager.LoadScene("Main Menu");
+        }
+    }
+
     public bool IsPlayerTurn() { return (currentPlayer == "white" && currentPhase == GamePhase.PlayerTurnMove); }
 }

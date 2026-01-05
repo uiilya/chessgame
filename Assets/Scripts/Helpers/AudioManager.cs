@@ -6,6 +6,7 @@ public class AudioManager : MonoBehaviour
     [Header("Audio Clips")]
     public List<AudioClip> deckDealClips;
     public List<AudioClip> pieceImpactClips;
+    public List<AudioClip> pieceImpactClip;
     public List<AudioClip> pieceMoveClips;
 
     [Header("Settings")]
@@ -24,6 +25,7 @@ public class AudioManager : MonoBehaviour
     public void PlayDeckDeal() => PlayRandom(deckDealClips);
     public void PlayPieceImpact() => PlayRandom(pieceImpactClips);
     public void PlayPieceMove() => PlayRandom(pieceMoveClips);
+    public void PlayPieceImpactOne() => PlayRandom(pieceImpactClip);
 
     private void PlayRandom(List<AudioClip> clips)
     {

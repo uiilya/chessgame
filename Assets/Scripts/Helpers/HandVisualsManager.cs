@@ -30,6 +30,7 @@ public class HandVisualsManager : MonoBehaviour
     private List<GameObject> activeAIHandCards = new List<GameObject>();
 
     [Header("White Piece Icons")]
+    public Sprite icon_king_white;
     public Sprite icon_queen_white;
     public Sprite icon_rook_white;
     public Sprite icon_bishop_white;
@@ -37,6 +38,7 @@ public class HandVisualsManager : MonoBehaviour
     public Sprite icon_pawn_white;
 
     [Header("Black Piece Icons")]
+    public Sprite icon_king_black;
     public Sprite icon_queen_black;
     public Sprite icon_rook_black;
     public Sprite icon_bishop_black;
@@ -481,6 +483,7 @@ public class HandVisualsManager : MonoBehaviour
         {
             switch (type)
             {
+                case "king": return icon_king_white;
                 case "queen": return icon_queen_white;
                 case "rook": return icon_rook_white;
                 case "bishop": return icon_bishop_white;
@@ -492,6 +495,7 @@ public class HandVisualsManager : MonoBehaviour
         {
             switch (type)
             {
+                case "king": return icon_king_black;
                 case "queen": return icon_queen_black;
                 case "rook": return icon_rook_black;
                 case "bishop": return icon_bishop_black;

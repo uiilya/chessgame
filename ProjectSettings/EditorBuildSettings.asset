@@ -12,6 +12,9 @@ EditorBuildSettings:
     path: Assets/Scenes/Main Menu.unity
     guid: ed9d37d981b7f5941b592f28a7148db4
   - enabled: 1
+    path: Assets/Scenes/DeckBuilderScene.unity
+    guid: 04dfa8ce6e31b8242be487f184c098a5
+  - enabled: 1
     path: Assets/Scenes/ChessScene.unity
     guid: 361e98fee18fcaf44879205f13bc98fe
   m_configObjects:

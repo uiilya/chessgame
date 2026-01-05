@@ -1,19 +1,26 @@
 using UnityEngine;
-using UnityEngine.SceneManagement; // IMPORTANT: This namespace is required to switch scenes
+using UnityEngine.SceneManagement;
 
 public class MainMenuController : MonoBehaviour
 {
-    // Call this function to load the chess scene
     public void PlayGame()
     {
-        // Replace "ChessSceneName" with the EXACT name of your chess scene
-        SceneManager.LoadScene("ChessScene");
+        // Instead of loading scene directly, we initialize the roguelike run
+        if (ProgressionManager.Instance != null)
+        {
+            ProgressionManager.Instance.StartNewRun();
+        }
+        else
+        {
+            Debug.LogError("ProgressionManager is missing! Make sure it's in the scene or bootstrapped.");
+            // Fallback for testing
+            SceneManager.LoadScene("ChessScene");
+        }
     }
 
-    // Optional: Call this to close the game
     public void QuitGame()
     {
-        Debug.Log("Quit!"); // Prints to console because Application.Quit() doesn't work in the editor
+        Debug.Log("Quit!");
         Application.Quit();
     }
 }

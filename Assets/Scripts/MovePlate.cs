@@ -26,27 +26,20 @@ public class MovePlate : MonoBehaviour
     public void OnMouseUpReference()
     {
         controller = GameObject.FindGameObjectWithTag("GameController");
+        if (controller == null) return;
+
         GameManager gm = controller.GetComponent<GameManager>();
 
-        // 1. Attack Logic
-        if (attack)
-        {
-            GameObject cp = gm.GetPosition(matrixX, matrixY);
-            
-            // This calls CapturePiece -> which now plays PlayPieceImpact()
-            gm.CapturePiece(cp);
-        }
-        else
-        {
-            // If we are NOT capturing, we are moving normally.
-            // Play the "Swish" sound.
-            gm.PlayMoveSound();
-        }
-
-        // 2. Move Logic
+        // REMOVED: Manual CapturePiece call. 
+        // REMOVED: Manual PlayMoveSound call.
+        // REASON: GameManager.MoveSequence() handles both capturing and sound logic centrally.
+        
+        // 1. Initiate the Move
+        // The GameManager will detect if there is a piece at (matrixX, matrixY) and capture it automatically.
         gm.MovePiece(reference, matrixX, matrixY);
         
-        // 3. Cleanup
+        // 2. Cleanup
+        // We destroy the plates immediately so the UI is clean while the piece moves.
         reference.GetComponent<ChessPiece>().DestroyMovePlates();
     }
 

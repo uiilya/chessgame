@@ -5,6 +5,7 @@ public class UIManager : MonoBehaviour
 {
     [Header("UI References")]
     public GameObject gameOverPanel;
+    public GameObject menuPanel;
     public TextMeshProUGUI winnerText;
     public TextMeshProUGUI turnIndicator;
     public TextMeshProUGUI phaseIndicator;
@@ -22,10 +23,20 @@ public class UIManager : MonoBehaviour
     public void ShowVictory(string winner)
     {
         if (gameOverPanel) gameOverPanel.SetActive(true);
-        if (winnerText)
+        // if (winnerText)
+        // {
+        //     if (winner == "white") winnerText.text = "VICTORY!";
+        //     else winnerText.text = "DEFEAT";
+        // }
+        winnerText.text = winner;
+    }
+
+    public void OpenMenu()
+    {
+        if (menuPanel != null)
         {
-            if (winner == "white") winnerText.text = "VICTORY!";
-            else winnerText.text = "DEFEAT";
+            bool isActive = menuPanel.activeSelf;
+            menuPanel.SetActive(!isActive);
         }
     }
 }
